@@ -107,7 +107,19 @@ exports.handler = (event, context, callback) => {
           if (err) throw err;
           console.log(newInsertedData);
           console.log(newUpdatedData);
-          console.log('Done');
+
+          let dbData = {};
+          dbData.insert = newInsertedData;
+          dbData.update = newUpdatedData;
+          params = {
+            Body: JSON.stringify(dbData),
+            Key: 'json/db_data.json',
+            Bucket: config.bucket_name,
+          };
+          s3.putObject(params, function(err, data) {
+            if (err) throw err;
+            console.log('Done');
+          });
         });
       }
     ]);
