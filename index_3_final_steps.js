@@ -49,8 +49,8 @@ exports.handler = (event, context, callback) => {
     }
 
     console.log('Valid ', splitJsonFileKeys);
-    console.log('New ', newCsvMapping);
-    console.log('Old' , oldCsvMapping);
+    console.log('New ', newCsvMappingKey);
+    console.log('Old' , oldCsvMappingKey);
 
     let performOps = function(file, done) {
       console.log('In performOps');
@@ -86,7 +86,7 @@ exports.handler = (event, context, callback) => {
         s3.getObject({ Bucket: config.bucket_name, Key: 'template-sap-user-data/b.csv' }, function(err, data) {
            console.log('Old Csv data object fetched');
            csv()
-            .fromString(data)
+            .fromString(data.Body.toString())
             .then((json) => {
               oldCsvJson = json;
               console.log('Old Csv Json loaded');
@@ -95,7 +95,7 @@ exports.handler = (event, context, callback) => {
         });
       },
       function(callback) {
-        async.eachLimit(files, 5, performOps, function(err) {
+        async.eachLimit(splitJsonFileKeys, 5, performOps, function(err) {
           if (err) throw err;
           console.log(newInsertedData);
           console.log(newUpdatedData);
