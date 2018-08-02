@@ -10,7 +10,8 @@ var con = mysql.createConnection({
 
 con.connect(function(err) {
   if(err) throw err;
-  var table = 'markers';
+  var table = config.mysql.table;
+
   var insert_sql = "INSERT INTO " + table + " VALUES('', 'test1', 'test address', '1212.23', '12312.232')";
   var update_sql = "UPDATE " + table + " SET name = 'asd' where name='test1'";
 
