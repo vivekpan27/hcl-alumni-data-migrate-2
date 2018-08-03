@@ -154,14 +154,25 @@ exports.handler = (event, context, callback) => {
           con.connect(function(err) {
             if(err) throw err;
             var table = config.mysql.table;
-            console.log("In connect function");
-            var sql = "INSERT INTO " + table + " (id, sap, email) VALUES ?";
 
-            con.query(sql, [db_insert_values_array], function(err, result){
-              if (err) throw err;
-              console.log('Insertion complete : ' + result.affectedRows);
+            // First delete existing records from table.
+            console.log("In delete function");
+            var sql = "DELETE FROM " + table;
+            con.query(sql, function(err, result) {
+              if (err) throw error;
+              console.log(table + ' table truncated!');
+              console.log("Number of records deleted: " + result.affectedRows);
+
+              // Then insert complete data into table.
+              console.log("In connect function");
+              var sql = "INSERT INTO " + table + " (id, sap, email) VALUES ?";
+
+              con.query(sql, [db_insert_values_array], function(err, result){
+                if (err) throw err;
+                console.log('Insertion complete : ' + result.affectedRows);
+              });
+              con.end();
             });
-            con.end();
           });
         });
         callback(null);
