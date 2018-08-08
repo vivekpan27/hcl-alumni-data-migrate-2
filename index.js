@@ -14,7 +14,7 @@ lambda = new aws.Lambda({
 
 exports.handler = (event, context, callback) => {
 
-console.log('In exports handler of lambda 1');
+  console.log('In exports handler of lambda 1');
   /*
   Function is called for old csv file.
   */
@@ -115,36 +115,83 @@ console.log('In exports handler of lambda 1');
 
     s3Stream.pipe(csvStream);
   }
+
+  /*
+  Function is called for creating Json objects.
+  */
+  function callMappingFunctions() {
+    async.parallel([
+      function(callback) {
+        csvToJsonIdRowMappingAndCsvSplit(newCsvFile);
+        console.log('New csv file mapping created.');
+        callback();
+      },
+      function(callback) {
+        csvToJsonIdRowMapping(oldCsvFile);
+        console.log('Old csv file mapping created.');
+        callback();
+      },
+    ],
+      function(err, results) {
+        console.log('In callback function for async parallel.');
+        var params = {
+            FunctionName: 'hcl-alumni-data-migrate-2',
+            InvocationType: 'Event',
+            Payload: '',
+            Qualifier: context.functionVersion,
+        };
+        lambda.invoke(params, function(err, result) {
+          if (err) throw err;
+          console.log('Called 2nd lambda function successful. REsult', result);
+          // callback(null, result.message);
+        });
+      }
+    );
+  }
+
   /* Function definitions end */
 
   let newCsvFile = event.Records[0].s3.object.key;
+  console.log('New csv file ', newCsvFile);
   let oldCsvFile = 'template-sap-user-data/b.csv';
+  console.log('Old csv file ', oldCsvFile);
 
-  async.parallel([
-    function(callback) {
-      csvToJsonIdRowMappingAndCsvSplit(newCsvFile);
-      console.log('New csv file mapping created.');
-      callback();
-    },
-    function(callback) {
-      csvToJsonIdRowMapping(oldCsvFile);
-      console.log('Old csv file mapping created.');
-      callback();
-    },
-  ],
-  function(err, results) {
-    console.log('In callback function for async parallel.');
-    var params = {
-        FunctionName: 'hcl-alumni-data-migrate-2',
-        InvocationType: 'Event',
-        Payload: '',
-        Qualifier: context.functionVersion,
+  s3.listObjectsV2({Bucket: config.bucket_name, Prefix: 'json/'}, function(err, data) {
+    console.log('IN listObjectsV2');
+    if (err) throw err;
+    jsonFolderContents = data.Contents;
+
+    jsonFolderKeys = [];
+
+    console.log('Before for loop');
+    for (var i = 0; i < jsonFolderContents.length; i++) {
+      key = jsonFolderContents[i].Key;
+      split_key = key.split('/');
+      if (!(split_key[1] == '')) {
+        jsonFolderKeys.push({Key: jsonFolderContents[i].Key});
+      }
+    }
+
+    var params1 = {
+      Bucket: config.bucket_name, /* required */
+      Delete: { /* required */
+        Objects: jsonFolderKeys,
+      },
     };
-    lambda.invoke(params, function(err, result) {
+
+    console.log('Before deleteObjects');
+
+    if (jsonFolderKeys.length > 0) {
+      s3.deleteObjects(params1, function(err, data) {
         if (err) throw err;
-        console.log('Called 2nd lambda function successful');
-        callback(null, result.message);
-    });
+        console.log("Deleted old json folder objects");
+        callMappingFunctions();
+      });
+    }
+    else {
+      callMappingFunctions();
+    }
+    // Delete /json folder contents.
   });
 
   callback(null, 'Hello from Lambda');
