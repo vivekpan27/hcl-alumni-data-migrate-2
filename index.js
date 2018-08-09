@@ -18,7 +18,7 @@ exports.handler = (event, context, callback) => {
   /*
   Function is called for old csv file.
   */
-  function csvToJsonIdRowMapping(file) {
+  function csvToJsonIdRowMapping(file, callback) {
     let s3Stream = s3.getObject({ Bucket: config.bucket_name, Key: file }).createReadStream();
     let jsonBreakDown = [];
     let count = 0;
@@ -49,18 +49,28 @@ exports.handler = (event, context, callback) => {
         params.Key = 'json/old_csv_mapping.json';
         s3.putObject(params, function(err, data) {
           if (err) throw err;
+          callback();
         });
       });
 
     s3Stream.pipe(csvStream);
   }
 
+
+  function saveToS3(arr, key, callback) {
+    s3.putObject({Bucket: config.bucket_name, Body: arr, Key: 'json/file' + key + '.json'}, function(err, data) {
+      if (err) throw err;
+      callback();
+    });
+  }
+
   /*
   Function is called for new csv file.
   */
-  function csvToJsonIdRowMappingAndCsvSplit(file) {
+  function csvToJsonIdRowMappingAndCsvSplit(file, callback) {
     let s3Stream = s3.getObject({ Bucket: config.bucket_name, Key: file }).createReadStream();
     let jsonBreakDown = [];
+    let jsonBreakDownComplete = [];
     let count = 0;
     let id = 0;
     let id_column = -1;
@@ -82,14 +92,24 @@ exports.handler = (event, context, callback) => {
 
         tempjsonObj = JSON.parse(jsonStr);
         jsonObj.push({'id' : tempjsonObj['id'], 'row' : rowNumber});
-
         jsonBreakDown.push(jsonStr);
+
+        // if (jsonBreakDown.length === 10000) {
+        //   params.Body = '[' + jsonBreakDown + ']';
+        //   params.Key = 'json/file' + count + '.json';
+        //   s3.putObject(params, function(err, data) {
+        //     if (err) throw err;
+        //   });
+        //   jsonBreakDown = [];
+        //   count++;
+        // }
         if (jsonBreakDown.length === 10000) {
-          params.Body = '[' + jsonBreakDown + ']';
-          params.Key = 'json/file' + count + '.json';
-          s3.putObject(params, function(err, data) {
-            if (err) throw err;
-          });
+          jsonBreakDownComplete[count] = '[' + jsonBreakDown + ']';
+          // params.Body = '[' + jsonBreakDown + ']';
+          // params.Key = 'json/file' + count + '.json';
+          // s3.putObject(params, function(err, data) {
+            // if (err) throw err;
+          // });
           jsonBreakDown = [];
           count++;
         }
@@ -98,19 +118,26 @@ exports.handler = (event, context, callback) => {
       })
       .on('done', (error)=> {
         if (jsonBreakDown.length > 0) {
-          params.Body = '[' + jsonBreakDown + ']';
-          params.Key = 'json/file' + count + '.json';
-          s3.putObject(params, function(err, data) {
-            if (err) throw err;
-          });
+          jsonBreakDownComplete[count] = '[' + jsonBreakDown + ']';
+          // params.Body = '[' + jsonBreakDown + ']';
+          // params.Key = 'json/file' + count + '.json';
+          // s3.putObject(params, function(err, data) {
+            // if (err) throw err;
+          // });
         }
 
-
-        params.Body = JSON.stringify(jsonObj, null, 2);
-        params.Key = 'json/new_csv_mapping.json';
-        s3.putObject(params, function(err, data) {
+        // Save the new json files split into individual files of size 10,000 rows.
+        async.eachOfLimit(jsonBreakDownComplete, 5, saveToS3, function(err) {
           if (err) throw err;
+
+          params.Body = JSON.stringify(jsonObj, null, 2);
+          params.Key = 'json/new_csv_mapping.json';
+          s3.putObject(params, function(err, data) {
+            if (err) throw err;
+            callback();
+          });
         });
+
       });
 
     s3Stream.pipe(csvStream);
@@ -122,14 +149,18 @@ exports.handler = (event, context, callback) => {
   function callMappingFunctions() {
     async.parallel([
       function(callback) {
-        csvToJsonIdRowMappingAndCsvSplit(newCsvFile);
-        console.log('New csv file mapping created.');
-        callback();
+        csvToJsonIdRowMappingAndCsvSplit(newCsvFile, function(err) {
+          if (err) throw err;
+          console.log('New csv file mapping created.');
+          callback();
+        });
       },
       function(callback) {
-        csvToJsonIdRowMapping(oldCsvFile);
-        console.log('Old csv file mapping created.');
-        callback();
+        csvToJsonIdRowMapping(oldCsvFile, function(err){
+          if (err) throw err;
+          console.log('Old csv file mapping created.');
+          callback();
+        });
       },
     ],
       function(err, results) {
@@ -149,50 +180,75 @@ exports.handler = (event, context, callback) => {
     );
   }
 
+
+
+
   /* Function definitions end */
 
   let newCsvFile = event.Records[0].s3.object.key;
   console.log('New csv file ', newCsvFile);
-  let oldCsvFile = 'template-sap-user-data/b.csv';
-  console.log('Old csv file ', oldCsvFile);
+  let oldCsvFile = '';
 
-  s3.listObjectsV2({Bucket: config.bucket_name, Prefix: 'json/'}, function(err, data) {
-    console.log('IN listObjectsV2');
-    if (err) throw err;
-    jsonFolderContents = data.Contents;
+  s3.listObjectsV2({Bucket: config.bucket_name, Prefix: 'template-sap-user-data/'}, function(err, template_folder) {
+    var template_folder_files = template_folder.Contents;
+    console.log('template_folder_files', template_folder_files);
+    var temp = [];
 
-    jsonFolderKeys = [];
+    // Sort the template files according to timestamp and get last updated file.
+    // temp[0] will be the last updated file.
+    for (var i = 0; i < template_folder_files.length; i++) {
+      date = template_folder_files[i].LastModified;
+      timestamp = Date.parse(date);
+      temp.push({ 'key': i, 'timestamp': timestamp });
+    }
 
-    console.log('Before for loop');
-    for (var i = 0; i < jsonFolderContents.length; i++) {
-      key = jsonFolderContents[i].Key;
-      split_key = key.split('/');
-      if (!(split_key[1] == '')) {
-        jsonFolderKeys.push({Key: jsonFolderContents[i].Key});
+    temp.sort(function(x, y) {
+      return y.timestamp - x.timestamp;
+    });
+    console.log('temp ', temp);
+    oldCsvFile = template_folder_files[temp[0].key].Key;
+    console.log('Old csv file ', oldCsvFile);
+
+    s3.listObjectsV2({Bucket: config.bucket_name, Prefix: 'json/'}, function(err, data) {
+      console.log('IN listObjectsV2');
+      if (err) throw err;
+      jsonFolderContents = data.Contents;
+
+      jsonFolderKeys = [];
+
+      console.log('Before for loop');
+      for (var i = 0; i < jsonFolderContents.length; i++) {
+        key = jsonFolderContents[i].Key;
+        split_key = key.split('/');
+        if (!(split_key[1] == '')) {
+          jsonFolderKeys.push({Key: jsonFolderContents[i].Key});
+        }
       }
-    }
 
-    var params1 = {
-      Bucket: config.bucket_name, /* required */
-      Delete: { /* required */
-        Objects: jsonFolderKeys,
-      },
-    };
+      var params1 = {
+        Bucket: config.bucket_name, /* required */
+        Delete: { /* required */
+          Objects: jsonFolderKeys,
+        },
+      };
 
-    console.log('Before deleteObjects');
+      console.log('Before deleteObjects');
 
-    if (jsonFolderKeys.length > 0) {
-      s3.deleteObjects(params1, function(err, data) {
-        if (err) throw err;
-        console.log("Deleted old json folder objects");
+      if (jsonFolderKeys.length > 0) {
+        s3.deleteObjects(params1, function(err, data) {
+          if (err) throw err;
+          console.log("Deleted old json folder objects");
+          callMappingFunctions();
+        });
+      }
+      else {
         callMappingFunctions();
-      });
-    }
-    else {
-      callMappingFunctions();
-    }
-    // Delete /json folder contents.
+      }
+    });
+
   });
+
+
 
   callback(null, 'Hello from Lambda');
 };

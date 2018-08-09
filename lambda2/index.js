@@ -100,7 +100,7 @@ exports.handler = (event, context, callback) => {
           else {
             // If id is not present in old csv file, that means insertion has occured.
             newInsertedData.push(jsonFileData[i]);
-            console.log("Inserted");
+            console.log("Inserted", jsonFileData[i]);
           }
         }
 
@@ -110,9 +110,34 @@ exports.handler = (event, context, callback) => {
       });
     }
 
+    var oldCsvFileKey = '';
     async.series([
       function(callback) {
-        s3.getObject({ Bucket: config.bucket_name, Key: 'template-sap-user-data/b.csv' }, function(err, data) {
+        s3.listObjectsV2({Bucket: config.bucket_name, Prefix: 'template-sap-user-data/'}, function(err, template_folder) {
+          var template_folder_files = template_folder.Contents;
+          console.log('template_folder_files', template_folder_files);
+          var temp = [];
+
+          // Sort the template files according to timestamp and get last updated file.
+          // temp[0] will be the last updated file.
+          for (var i = 0; i < template_folder_files.length; i++) {
+            date = template_folder_files[i].LastModified;
+            timestamp = Date.parse(date);
+            temp.push({ 'key': i, 'timestamp': timestamp });
+          }
+
+          temp.sort(function(x, y) {
+            return y.timestamp - x.timestamp;
+          });
+          console.log('temp ', temp);
+          oldCsvFileKey = template_folder_files[temp[0].key].Key;
+          console.log('Old csv file key', oldCsvFileKey);
+
+          callback();
+        });
+      },
+      function(callback) {
+        s3.getObject({ Bucket: config.bucket_name, Key: oldCsvFileKey }, function(err, data) {
            console.log('Old Csv data object fetched');
            csv()
             .fromString(data.Body.toString())
@@ -136,6 +161,7 @@ exports.handler = (event, context, callback) => {
       },
       function(callback) {
         async.mapLimit(splitJsonFileKeys, 5, performOps, function(err, updatedExistingJsonData) {
+          console.log('In callback for async.maplimit');
           if (err) throw err;
           console.log('Length ', updatedExistingJsonData.length);
           console.log(Object.keys(updatedExistingJsonData));
@@ -150,6 +176,7 @@ exports.handler = (event, context, callback) => {
           dbData.update = updatedExistingJsonData[0];
           dbData.complete = dbData.update.concat(dbData.insert);
 
+          console.log("Finished calculatin dbData.complete");
 
           var db_insert_values_array = Object.keys(dbData.complete).map(function(key) {
             return [dbData.complete[key].id, dbData.complete[key].sap, dbData.complete[key].email];
@@ -166,6 +193,7 @@ exports.handler = (event, context, callback) => {
 
           con.connect(function(err) {
             if(err) throw err;
+            console.log('Connection established to database.');
             var table = config.mysql.table;
 
             // First delete existing records from table.
@@ -188,7 +216,7 @@ exports.handler = (event, context, callback) => {
 
                   s3.upload({
                     Bucket: config.bucket_name,
-                    Key: 'FullData_' + Math.round(new Date().getTime() / 100) + '.csv',
+                    Key: 'template-sap-user-data/FullData_' + Math.round(new Date().getTime() / 100) + '.csv',
                     Body: csvData,
                     Metadata: {'Content-Type': 'text/csv'}
                   },
